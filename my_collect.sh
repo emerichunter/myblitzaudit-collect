@@ -473,20 +473,20 @@ if [[ -n "$DOCKER_CONTAINER" ]]; then
   if [[ -n "$MY_PASSWORD" ]]; then
     docker exec -e "MYSQL_PWD=${MY_PASSWORD}" "$DOCKER_CONTAINER" \
       ${DOCKER_MYSQL} -u "$MY_USER" -s -N \
-      -e "SHOW SLAVE STATUS\G; SHOW REPLICA STATUS\G;" 2>/dev/null \
+      -e "SHOW SLAVE STATUS\G; SHOW REPLICA STATUS\G;" \
       > "$REPL_STATUS_FILE" 2>/dev/null || true
     docker exec -e "MYSQL_PWD=${MY_PASSWORD}" "$DOCKER_CONTAINER" \
       ${DOCKER_MYSQL} -u "$MY_USER" -s -N \
-      -e "SHOW BINARY LOGS;" 2>/dev/null \
+      -e "SHOW BINARY LOGS;" \
       > "$BINLOG_FILE" 2>/dev/null || true
   else
     docker exec "$DOCKER_CONTAINER" \
       ${DOCKER_MYSQL} -u "$MY_USER" -s -N \
-      -e "SHOW SLAVE STATUS\G; SHOW REPLICA STATUS\G;" 2>/dev/null \
+      -e "SHOW SLAVE STATUS\G; SHOW REPLICA STATUS\G;" \
       > "$REPL_STATUS_FILE" 2>/dev/null || true
     docker exec "$DOCKER_CONTAINER" \
       ${DOCKER_MYSQL} -u "$MY_USER" -s -N \
-      -e "SHOW BINARY LOGS;" 2>/dev/null \
+      -e "SHOW BINARY LOGS;" \
       > "$BINLOG_FILE" 2>/dev/null || true
   fi
 fi
