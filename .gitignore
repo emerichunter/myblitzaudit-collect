@@ -6,3 +6,4 @@ blitz_*/
 Thumbs.db
 __pycache__/
 battle-test-evidence.json
+dist/

@@ -13,6 +13,22 @@ render reports. Sample reports and a real bundle are published in
 
 ---
 
+## Handing this to a client
+
+`make-client-kit.sh` builds a zip containing only what the client needs: the two
+collectors, the dump SQL, both acceptance tests, the collection guide and a
+checksum file. No engine, no report SQL.
+
+```bash
+./make-client-kit.sh --version 1.0
+# dist/myblitzaudit-kit-1.0.zip  + SHA-256
+```
+
+The guide inside the kit, [docs/collection-guide.md](docs/collection-guide.md),
+is written for the client's DBA: grants, one command per platform, verification,
+packaging, and a table of exactly what leaves their server for their security
+reviewer.
+
 ## Quick start
 
 Linux / macOS:
