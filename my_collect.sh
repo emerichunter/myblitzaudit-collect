@@ -437,7 +437,7 @@ _ok "Version compatibility applied"
 # Step 1: Discover databases
 # ---------------------------------------------------------------------------
 DB_DISCOVERY_SQL="SELECT SCHEMA_NAME FROM information_schema.SCHEMATA \
-  WHERE SCHEMA_NAME NOT IN ('mysql','sys','information_schema','performance_schema') \
+  WHERE SCHEMA_NAME NOT IN ('mysql','sys','information_schema','performance_schema','_blitz_replay') \
   ORDER BY SCHEMA_NAME;"
 
 declare -a DB_LIST

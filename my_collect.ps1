@@ -344,7 +344,7 @@ $StatSql    = Get-PatchedSql -Path $StatSql    -Kind 'stat'
 # Step 1: Discover databases
 # ---------------------------------------------------------------------------
 $DbDiscoverySql = "SELECT SCHEMA_NAME FROM information_schema.SCHEMATA " +
-    "WHERE SCHEMA_NAME NOT IN ('mysql','sys','information_schema','performance_schema') " +
+    "WHERE SCHEMA_NAME NOT IN ('mysql','sys','information_schema','performance_schema','_blitz_replay') " +
     "ORDER BY SCHEMA_NAME;"
 
 $DbList = @()

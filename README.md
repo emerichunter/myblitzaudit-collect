@@ -40,7 +40,9 @@ One schema only, custom destination:
 ./my_collect.sh --host localhost --user root --database appdb --output-dir /tmp/audit
 ```
 
-Every connectable non-system schema is collected by default. Use `--database`
+Every connectable non-system schema is collected by default. The replay
+engine's own `_blitz_replay` shadow schema is skipped, so replaying a bundle on
+the same server never contaminates the next collection. Use `--database`
 one or more times to restrict the run. `bash my_collect.sh --help` lists
 everything.
 
@@ -117,6 +119,34 @@ my_audit_MY80_20260510_143022/
 ```
 
 ---
+
+## Verify a bundle
+
+A bundle that "ran fine" is not a bundle that is usable. `tests/battle-test.ps1`
+checks the failure modes that matter, on any machine, before you send anything:
+
+```powershell
+.\tests\battle-test.ps1 -Bundle .\my_audit_MY80_20260510_143022
+```
+
+Or collect and verify in one step:
+
+```powershell
+.\tests\battle-test.ps1 -Collect -Bundle .\evidence `
+    -Target "-HostName db.example.com -User audit_reader"
+```
+
+It asserts that every JSON file parses as strict UTF-8, that no file carries a
+byte-order mark, that no SQL error text was written where a snapshot should be,
+that every file listed in the manifest exists at the recorded size, that the
+per-database catalog and statistics files are present and not truncated, that
+the global snapshot carries no password hashes, and — with `-ReportsDir` — that
+the rendered reports reference no external URL.
+
+Exit code 0 means every check passed. The run writes
+`battle-test-evidence.json` into the bundle with the PowerShell version, the OS,
+the file inventory and the findings, so a result can be sent back as evidence
+rather than as an opinion.
 
 ## Supported versions
 
