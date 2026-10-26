@@ -93,6 +93,25 @@ function Read-Utf8Strict([string]$Path) {
     }
 }
 
+# Structural check for JSON that ConvertFrom-Json refuses to model: balanced
+# braces, and an even number of unescaped quotes. Catches truncation, which is
+# the failure this harness exists to find.
+function Test-JsonShape([string]$Text) {
+    $t = $Text.Trim()
+    if ($t.Length -lt 2) { return $false }
+    $first = $t[0]; $last = $t[$t.Length - 1]
+    $enclosureOk = (($first -eq '{' -and $last -eq '}') -or ($first -eq '[' -and $last -eq ']'))
+    if (-not $enclosureOk) { return $false }
+    $quotes = 0
+    $escaped = $false
+    foreach ($ch in $t.ToCharArray()) {
+        if ($escaped) { $escaped = $false; continue }
+        if ($ch -eq [char]'\\') { $escaped = $true; continue }
+        if ($ch -eq [char]'"') { $quotes++ }
+    }
+    return (($quotes % 2) -eq 0)
+}
+
 function Test-Bom([string]$Path) {
     $bytes = [System.IO.File]::ReadAllBytes($Path)
     if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) { return $true }
@@ -195,7 +214,21 @@ try {
     exit 1
 }
 
-foreach ($key in @("blitz_version", "generated_at", "mysql_version", "host", "databases", "files")) {
+# Two bundle dialects: myblitzaudit (blitz_version, mysql_version) and
+# pgblitzaudit (zk_audit_version, pg_version). Check what this one actually is.
+$versionKey = ""
+foreach ($candidate in @("blitz_version", "zk_audit_version")) {
+    if ($null -ne $manifest.$candidate) { $versionKey = $candidate; break }
+}
+if ($versionKey) { Ok "manifest has '$versionKey' = $($manifest.$versionKey)" } else { Bad "manifest has no version field (blitz_version or zk_audit_version)" }
+
+$serverKey = ""
+foreach ($candidate in @("mysql_version", "pg_version")) {
+    if ($null -ne $manifest.$candidate) { $serverKey = $candidate; break }
+}
+if ($serverKey) { Ok "manifest records the server version ($serverKey)" } else { Bad "manifest records no server version" }
+
+foreach ($key in @("generated_at", "host", "databases", "files")) {
     if ($null -ne $manifest.$key) { Ok "manifest has '$key'" } else { Bad "manifest is missing '$key'" }
 }
 
@@ -224,7 +257,8 @@ foreach ($f in $listed) {
     }
 }
 
-$onDisk = @(Get-ChildItem -LiteralPath $bundleFull -File | Where-Object { $_.Name -ne "manifest.json" })
+$onDisk = @(Get-ChildItem -LiteralPath $bundleFull -File |
+            Where-Object { $_.Name -ne "manifest.json" -and $_.Name -ne "battle-test-evidence.json" })
 $listedNames = @($listed | ForEach-Object { $_.name })
 foreach ($f in $onDisk) {
     if ($listedNames -notcontains $f.Name) { Bad "file on disk is not in the manifest: $($f.Name)" }
@@ -258,12 +292,24 @@ foreach ($f in $jsonFiles) {
         continue
     }
 
-    try {
-        [void]($text | ConvertFrom-Json)
+    $okJson = $false
+    $errMsg = ""
+    if ($PSVersionTable.PSVersion.Major -ge 6) {
+        try { [void]($text | ConvertFrom-Json -AsHashtable); $okJson = $true } catch { $errMsg = $_.Exception.Message }
+    }
+    if (-not $okJson) {
+        try { [void]($text | ConvertFrom-Json); $okJson = $true } catch { $errMsg = $_.Exception.Message }
+    }
+    if (-not $okJson -and $errMsg -match 'empty string') {
+        # Valid JSON with an "" key (a group with no application_name, for
+        # instance). ConvertFrom-Json cannot represent that before PS 6.
+        $okJson = Test-JsonShape $text
+        if ($okJson) { Ok "$($f.Name) is well-formed ($([int]($f.Length / 1024)) KB, empty key names; structural check)" }
+    }
+    if ($okJson -and $errMsg -notmatch 'empty string') {
         Ok "$($f.Name) parses ($([int]($f.Length / 1024)) KB)"
-    } catch {
-        $msg = $_.Exception.Message
-        Bad "$($f.Name) does not parse" ($msg.Substring(0, [Math]::Min(120, $msg.Length)))
+    } elseif (-not $okJson) {
+        Bad "$($f.Name) does not parse" ($errMsg.Substring(0, [Math]::Min(120, $errMsg.Length)))
     }
 }
 
@@ -301,10 +347,22 @@ $global = Join-Path $bundleFull "global_snapshot.json"
 if (Test-Path -LiteralPath $global) {
     $g = Read-Utf8Strict $global
     if ($g -match '"users"') { Ok "global snapshot carries the user inventory" } else { Bad "global snapshot has no users section" }
-    if ($g -match 'authentication_string') { Bad "global snapshot appears to contain password hashes" } else { Ok "no password hashes in the global snapshot" }
 } else {
-    Bad "global_snapshot.json is missing"
+    Info "no global_snapshot.json (expected for pgBlitzAudit bundles)"
 }
+
+# No password hashes anywhere, in either dialect: MySQL authentication_string,
+# PostgreSQL rolpassword.
+$hashHits = @()
+foreach ($f in $jsonFiles) {
+    $t = Read-Utf8Strict $f.FullName
+    # Only a key/value pair is a leaked hash. A statement digest that merely
+    # mentions the column (SELECT ... rolpassword IS NOT NULL) is not.
+    if ($t -and ($t -match '"authentication_string"\s*:\s*"[^"]+"' -or $t -match '"rolpassword"\s*:\s*"[^"]+"')) {
+        $hashHits += $f.Name
+    }
+}
+if ($hashHits.Count -gt 0) { Bad "password hashes present in: $($hashHits -join ', ')" } else { Ok "no password hashes in any JSON file" }
 
 if ($Password) {
     $leaks = @()
@@ -356,9 +414,10 @@ $evidence = [ordered]@{
     edition          = $PSVersionTable.PSEdition
     os               = [System.Environment]::OSVersion.VersionString
     bundle           = $bundleFull
-    manifest_version = $manifest.blitz_version
-    server_version   = $manifest.mysql_version
+    manifest_version = $manifest.$versionKey
+    server_version   = $manifest.$serverKey
     mariadb          = $manifest.is_mariadb
+    pg_major         = $manifest.pg_major
     databases        = $dbs
     file_count       = @($onDisk).Count
     total_bytes      = $totalBytes
