@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 # =============================================================================
 #  MY Audit Collector v1.0  (PowerShell)
 #  Zero Knowledge MySQL/MariaDB snapshot bundle — multi-database aware
