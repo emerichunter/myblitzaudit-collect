@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Shell syntax
+        run: |
+          for f in $(git ls-files '*.sh'); do bash -n "$f" && echo "OK $f"; done
+      - name: ShellCheck
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq shellcheck
+          shellcheck --severity=error $(git ls-files '*.sh')
+      - name: PowerShell syntax
+        shell: pwsh
+        run: |
+          $bad = 0
+          Get-ChildItem -Recurse -Filter *.ps1 | ForEach-Object {
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$null, [ref]$errors)
+            if ($errors.Count -gt 0) { Write-Host "FAIL $($_.Name): $($errors[0].Message)"; $bad++ }
+            else { Write-Host "OK $($_.Name)" }
+          }
+          if ($bad -gt 0) { exit 1 }
+
+  smoke:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ["mysql:5.7", "mysql:8.0", "mariadb:11.4"]
+    name: smoke (${{ matrix.image }})
+    steps:
+      - uses: actions/checkout@v4
+      - name: Collect and validate a bundle
+        run: bash tests/smoke.sh "${{ matrix.image }}"

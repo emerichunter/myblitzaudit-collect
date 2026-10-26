@@ -1,0 +1,7 @@
+my_audit_*/
+sys_*/
+blitz_*/
+*.log
+.DS_Store
+Thumbs.db
+__pycache__/
