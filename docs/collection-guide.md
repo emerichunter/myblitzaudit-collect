@@ -202,7 +202,22 @@ published as source.
 
 **Does this read my data?** No. Every query reads catalogue tables
 (`information_schema`, `performance_schema`, `mysql.user`) or aggregate counters.
-The schema dump is `mysqldump --no-data`.
+The DDL is `SHOW CREATE TABLE`, which returns the definition of a table and never
+a row. No `SELECT` touches application data, and no password hash leaves the
+server: accounts are reported as aggregates (plugin, lock state, TLS
+requirement), never with their authentication string.
+
+**What exactly is collected?** The volumes and counters (tables, indexes, sizes,
+`performance_schema` statistics), the structure (columns with types and
+collations, index columns with cardinality, foreign keys with their rules, CHECK
+constraints, partitions, histograms), the objects (the `CREATE` of every table
+and view), and the instance (accounts, global/schema/table/column privileges,
+roles, plugins, tablespaces, binary logs, replication, lock snapshots).
+
+**What if my server has no stored procedures?** The collector proves it rather
+than leaving a blank. It queries each object family explicitly and records the
+measured count in `objects_summary.json`, so a zero is a finding you can cite,
+not a folder you have to trust.
 
 **Can I run it on a replica?** Yes, and it is the better choice. Statistics will
 describe the replica, which is usually close enough; the configuration section
