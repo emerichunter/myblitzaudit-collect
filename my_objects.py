@@ -137,12 +137,25 @@ def collect_instance(c, dest):
         rc, out, err = c.query(sql, raw=True)
         res[name] = out.splitlines() if rc == 0 else [f'INDISPONIBLE: {err.strip()[:160]}']
     # comptes : agregats seulement, jamais l'empreinte de mot de passe
-    sql = c.select('user', ['user', 'host', 'plugin', 'password_last_changed', 'password_lifetime',
-                            'account_locked', 'password_expired', 'ssl_type', 'super_priv',
-                            'authentication_string'], schema='mysql')
+    desires = ['user', 'host', 'plugin', 'password_last_changed', 'password_lifetime',
+               'account_locked', 'password_expired', 'ssl_type', 'super_priv',
+               'file_priv', 'process_priv', 'grant_priv', 'repl_slave_priv',
+               'repl_client_priv', 'shutdown_priv', 'create_user_priv']
+    avail = c.columns_of('user', 'mysql')
+    gardees = [x for x in desires if x in avail]
+    # authentication_string is never selected: the hash is binary and contains
+    # tabs and control bytes, which shift every column after it in batch output.
+    # Presence is computed server-side and the hash never leaves the server.
+    if 'authentication_string' in avail:
+        gardees.append('a_mdp')
+        exprs = gardees[:-1] + ["CASE WHEN COALESCE(authentication_string,'') = '' "
+                                "THEN 0 ELSE 1 END AS a_mdp"]
+    else:
+        exprs = gardees
+    sql = f"select {', '.join(exprs)} from mysql.user"
     rc, out, err = c.query(sql)
     if rc == 0:
-        res['comptes'] = agreger_comptes(out.splitlines())
+        res['comptes'] = agreger_comptes(out.splitlines(), gardees)
     else:
         res['comptes'] = {'erreur': err.strip()[:200]}
     with open(f'{dest}/instance.json', 'w', encoding='utf-8') as f:
@@ -150,28 +163,43 @@ def collect_instance(c, dest):
     return res
 
 
-def agreger_comptes(lignes):
+def agreger_comptes(lignes, colonnes):
+    """Agrege les comptes. Les indices sont deduits de la liste de colonnes
+    reellement retournee : une colonne absente d'une version decalerait tout
+    le reste si on lisait des positions fixes."""
+    idx = {nom: i for i, nom in enumerate(colonnes)}
     agg = {'nb': 0, 'plugins': {}, 'verrouilles': 0, 'expires': 0,
-           'ssl': {}, 'sans_mot_de_passe': 0, 'super': 0, 'details': []}
+           'ssl': {}, 'sans_mot_de_passe': 0, 'super': 0, 'privileges_eleves': 0,
+           'details': []}
+    eleves = ('file_priv', 'process_priv', 'grant_priv', 'repl_slave_priv',
+              'repl_client_priv', 'shutdown_priv')
+
+    def champ(p, nom, defaut=''):
+        i = idx.get(nom)
+        return p[i] if i is not None and i < len(p) else defaut
+
     for l in lignes:
         p = l.split('\t')
-        if len(p) < 4:
+        if len(p) < 3:
             continue
-        user, host, plugin = p[0], p[1], p[2] or 'aucun'
-        locked = p[6] if len(p) > 6 else ''
-        expired = p[7] if len(p) > 7 else ''
-        ssl = (p[8] if len(p) > 8 else '') or 'NONE'
-        superp = p[9] if len(p) > 9 else ''
-        auth = p[10] if len(p) > 10 else ''
+        plugin = champ(p, 'plugin') or 'aucun'
+        locked = champ(p, 'account_locked')
+        expired = champ(p, 'password_expired')
+        ssl = champ(p, 'ssl_type') or 'NONE'
+        superp = champ(p, 'super_priv')
+        a_mdp = champ(p, 'a_mdp')
         agg['nb'] += 1
         agg['plugins'][plugin] = agg['plugins'].get(plugin, 0) + 1
         agg['ssl'][ssl] = agg['ssl'].get(ssl, 0) + 1
         agg['verrouilles'] += locked.upper() == 'Y'
         agg['expires'] += expired.upper() == 'Y'
         agg['super'] += superp.upper() == 'Y'
-        agg['sans_mot_de_passe'] += not auth or auth == 'NULL'
-        agg['details'].append({'user': user, 'host': host, 'plugin': plugin,
-                               'locked': locked, 'ssl_type': ssl, 'super': superp})
+        agg['sans_mot_de_passe'] += (a_mdp == '0')
+        if any(champ(p, x).upper() == 'Y' for x in eleves):
+            agg['privileges_eleves'] += 1
+        agg['details'].append({'user': champ(p, 'user'), 'host': champ(p, 'host'),
+                               'plugin': plugin, 'locked': locked,
+                               'ssl_type': ssl, 'super': superp})
     return agg
 
 
