@@ -112,7 +112,19 @@ my_audit_MY80_20260510_143022/
   global_snapshot.json           server-wide: users, variables, status, replication
   catalog_db_appdb.json          schema metadata for one database
   stat_db_appdb.json             performance counters for one database
-  schema_dump_appdb.sql          DDL only (mysqldump --no-data)
+  objects/                       object collector output (my_objects.py)
+    instance.json                accounts, privileges, roles, plugins, tablespaces,
+                                 binary logs, replication, locks, InnoDB status
+    tables.tsv.gz                engine, row format, sizes, options, comments
+    columns.tsv.gz               types, collations, defaults, generated expressions
+    indexes.tsv.gz               index columns, cardinality, visibility, expressions
+    fks.tsv.gz                   foreign keys with update and delete rules
+    checks.tsv.gz                CHECK constraints and their clauses
+    partitions.tsv.gz            partitions (empty when nothing is partitioned)
+    histograms.tsv.gz            column histograms, when they exist
+    schemata.tsv.gz              per-schema character set and collation
+    ddl/appdb.ddl.sql.gz         SHOW CREATE for every table and view
+    objects_summary.json         what was found, and what was proven absent
   manifest.json                  what was collected, when, from where
 ```
 
@@ -133,6 +145,47 @@ my_audit_MY80_20260510_143022/
   ]
 }
 ```
+
+---
+
+## Object collection
+
+`my_collect.sh` runs `my_objects.py` automatically. It captures the definition of
+every object, not just the volumes:
+
+- tables, views, columns, indexes, foreign keys with their rules, CHECK
+  constraints, partitions and histograms;
+- accounts and their authentication plugin, account locking, password expiry and
+  declared TLS requirement, plus global, schema, table and column privileges and
+  role grants;
+- tablespaces, data files, binary logs, replication state, metadata and data
+  lock snapshots, InnoDB table and index statistics.
+
+Two engineering choices are worth knowing when you modify it.
+
+**Do not use `mysqldump` for DDL.** Measured on a production fleet over a 40 ms
+link: `SHOW CREATE TABLE` in a single session costs 44 ms per table, while
+`mysqldump --no-data` costs 690 ms per table because it issues four to five
+metadata queries per table. On 209 000 tables that is the difference between
+two hours and forty hours. The collector writes one statement file with markers,
+runs it once per instance, and splits the output per schema afterwards.
+
+**Discover columns before composing a query.** `information_schema` changes shape
+between releases: `innodb_tablespaces.status` does not exist on every version,
+`routines.data_access` is gone from 8.4, `files.space` moved. A hard-coded column
+list silently kills the whole section. `my_objects.py` reads the available
+columns first and intersects them with what it wants.
+
+`PARTITIONS` is never scanned blindly: the view opens every table and costs
+minutes on a large instance. A cheap probe on `TABLES.CREATE_OPTIONS` decides
+whether the full scan is worth running.
+
+When an object family is absent, the collector says so explicitly in
+`objects_summary.json` rather than producing an empty file. A zero that was
+measured is a finding; an empty file is an ambiguity.
+
+Disable the whole phase with `--no-objects`. The legacy `mysqldump` export stays
+available behind `--force-schema-dump`.
 
 ---
 
@@ -183,7 +236,10 @@ matrix in the engine repository runs all six images.
   `--docker-container` to use the one inside a container.
 - PowerShell 5.1+ on Windows. MariaDB 11.4+ ships `mariadb` and `mariadb-dump`
   instead of `mysql` and `mysqldump`; the collector detects which pair exists.
-- No Python, no jq, no agents, no network access beyond the database port.
+- `python3` (3.8+) for the object collector. It uses the standard library only:
+  no package to install, no network access. Without it the legacy `mysqldump`
+  export still works, but you lose structure, accounts, privileges and DDL.
+- No jq, no agents, no network access beyond the database port.
 
 ---
 
