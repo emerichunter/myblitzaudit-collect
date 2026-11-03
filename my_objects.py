@@ -321,6 +321,9 @@ def collect_ddl(c, dest, schemas=None):
 
 # --------------------------------------------------------------- resume
 def resume(src, structure, inst, ddl):
+    """Resume d une passe. Les compteurs absents d une passe partielle sont
+    repris du resume precedent : un --no-structure ne doit pas effacer les
+    volumes mesures plus tot."""
     """Certifie la presence ou l'absence de chaque famille d'objets."""
     familles = {'vues': ('views', 1), 'procedures_fonctions': ('routines', 1),
                 'triggers': ('triggers', 1), 'evenements': ('events', 1),
@@ -334,8 +337,87 @@ def resume(src, structure, inst, ddl):
             out['familles'][nom] = n
         elif isinstance(inst.get(cle), list):
             out['familles'][nom] = len(inst[cle])
-    with open(f'{src}/objects_summary.json', 'w', encoding='utf-8') as f:
+    precedent = {}
+    chemin = f'{src}/objects_summary.json'
+    if os.path.exists(chemin):
+        try:
+            precedent = json.load(open(chemin))
+        except Exception:
+            precedent = {}
+    for cle in ('tables', 'colonnes', 'index', 'cles_etrangeres'):
+        if out.get(cle) is None and isinstance(precedent.get(cle), int):
+            out[cle] = precedent[cle]
+    if not out.get('ddl') and isinstance(precedent.get('ddl'), dict):
+        out['ddl'] = precedent['ddl']
+    for nom, n in (precedent.get('familles') or {}).items():
+        if out['familles'].get(nom) is None and isinstance(n, int):
+            out['familles'][nom] = n
+    with open(chemin, 'w', encoding='utf-8') as f:
         json.dump(out, f, indent=1)
+    return out
+
+
+def _lignes_gz(path):
+    n = 0
+    with gzip.open(path, 'rt', encoding='utf-8', errors='replace') as fh:
+        for _ in fh:
+            n += 1
+    return n
+
+
+def recount(src):
+    """Recompte tout depuis les fichiers, sans toucher au serveur.
+
+    Un passage partiel (--no-structure) ne doit pas laisser un resume a null :
+    les compteurs sont relus dans les artefacts, qui sont la seule verite.
+    """
+    utils = {'tables': 'tables.tsv.gz', 'colonnes': 'columns.tsv.gz',
+             'index': 'indexes.tsv.gz', 'cles_etrangeres': 'fks.tsv.gz'}
+    familles = {'vues': 'views.tsv.gz', 'procedures_fonctions': 'routines.tsv.gz',
+                'triggers': 'triggers.tsv.gz', 'evenements': 'events.tsv.gz',
+                'partitions': 'partitions.tsv.gz', 'contraintes_check': 'checks.tsv.gz'}
+    exc = {}
+    pc = f'{src}/structure_counts.json'
+    if os.path.exists(pc):
+        try:
+            exc = json.load(open(pc))
+        except Exception:
+            exc = {}
+    out = {'tables': None, 'colonnes': None, 'index': None, 'cles_etrangeres': None,
+           'ddl': {}, 'familles': {}, 'source': 'recount'}
+    for cle, nom in utils.items():
+        p = f'{src}/{nom}'
+        out[cle] = exc.get({'tables': 'tables', 'colonnes': 'columns', 'index': 'indexes',
+                            'cles_etrangeres': 'fks'}[cle]) if exc else None
+        if out[cle] is None:
+            out[cle] = _lignes_gz(p) if os.path.exists(p) else None
+    inst = {}
+    if os.path.exists(f'{src}/instance.json'):
+        try:
+            inst = json.load(open(f'{src}/instance.json'))
+        except Exception:
+            inst = {}
+    cles = {'vues': 'views', 'procedures_fonctions': 'routines', 'triggers': 'triggers',
+            'evenements': 'events', 'partitions': 'partitions', 'contraintes_check': 'checks'}
+    for nom, fichier in familles.items():
+        p = f'{src}/{fichier}'
+        if isinstance(inst.get(cles[nom]), list):
+            out['familles'][nom] = len(inst[cles[nom]])
+        elif os.path.exists(p):
+            out['familles'][nom] = _lignes_gz(p)
+        else:
+            out['familles'][nom] = None
+    d = f'{src}/ddl'
+    if os.path.isdir(d):
+        fichiers = sorted(x for x in os.listdir(d) if x.endswith('.ddl.sql.gz'))
+        objets = 0
+        for x in fichiers:
+            with gzip.open(f'{d}/{x}', 'rt', encoding='utf-8', errors='replace') as fh:
+                for line in fh:
+                    if line.startswith('CREATE '):
+                        objets += 1
+        out['ddl'] = {'fichiers': len(fichiers), 'objets': objets,
+                      'schemas': len(fichiers)}
     return out
 
 
@@ -351,7 +433,16 @@ def main():
     ap.add_argument('--no-instance', action='store_true')
     ap.add_argument('--no-structure', action='store_true')
     ap.add_argument('--no-ddl', action='store_true')
+    ap.add_argument('--recount', action='store_true',
+                    help='recalculer objects_summary.json depuis les fichiers, sans serveur')
     a = ap.parse_args()
+
+    if a.recount:
+        s = recount(a.output_dir)
+        with open(f'{a.output_dir}/objects_summary.json', 'w', encoding='utf-8') as f:
+            json.dump(s, f, indent=1)
+        print(json.dumps(s, indent=1))
+        return 0
 
     mdp = a.password
     if not mdp and a.password_file:
